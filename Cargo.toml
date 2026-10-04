@@ -2,5 +2,9 @@
 name = "hl-paper-trader"
 version = "0.1.0"
 edition = "2024"
+description = "Paper-trading engine for Hyperliquid perpetual futures"
+license = "MIT"
+repository = "https://github.com/BartScottPR0D/hl-paper-trader"
+readme = "README.md"
 
 [dependencies]
