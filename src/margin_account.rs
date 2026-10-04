@@ -622,3 +622,251 @@ impl MarginAccount {
         Ok(ids)
     }
 }
+
+
+// ───────────────────────── Position views ─────────────────────────
+
+/// A read-only projection of a single position with current market data.
+///
+/// Created on the fly by [`MarginAccount::position_view`]. Not stored —
+/// so it can never become stale or out of sync with the account.
+#[derive(Debug, Clone)]
+pub struct PositionView<'a> {
+    /// The underlying position.
+    pub position: &'a TradingPosition,
+    /// Current market price for the position's symbol.
+    pub current_price: Decimal,
+    /// Gross unrealized PnL (before fees and funding).
+    pub gross_pnl: Decimal,
+    /// Net unrealized PnL (after entry fee and accumulated funding).
+    pub net_pnl: Decimal,
+    /// Maintenance margin at the current price.
+    pub maintenance_margin: Decimal,
+    /// Estimated liquidation price, if computable.
+    ///
+    /// - **Isolated**: from [`TradingPosition::liquidation_price_isolated`].
+    /// - **Cross**: from [`MarginAccount::liquidation_price_cross`].
+    pub liquidation_price: Option<Decimal>,
+}
+
+/// Convenience methods for inspecting individual positions.
+impl MarginAccount {
+    /// Gross unrealized PnL of a single position.
+    ///
+    /// Returns `Ok(None)` if the position id is not found.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountError::MissingPrice`] if the position's symbol is not
+    /// in `prices`.
+    pub fn position_pnl(
+        &self,
+        id: PositionId,
+        prices: &Prices,
+    ) -> Result<Option<Decimal>, AccountError> {
+        match self.get_position(id) {
+            Some(pos) => {
+                let price = Self::price_for(prices, &pos.symbol)?;
+                Ok(Some(pos.gross_pnl(price)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Estimated liquidation price for a single position, aware of the
+    /// current [`MarginMode`].
+    ///
+    /// - **Isolated**: uses [`TradingPosition::liquidation_price_isolated`].
+    /// - **Cross**: uses [`MarginAccount::liquidation_price_cross`], which
+    ///   takes other positions into account.
+    ///
+    /// Returns `Ok(None)` if the position id is not found or the price
+    /// cannot be computed (e.g. degenerate formula).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountError::MissingPrice`] if any required symbol is not
+    /// in `prices`.
+    pub fn position_liquidation_price(
+        &self,
+        id: PositionId,
+        prices: &Prices,
+    ) -> Result<Option<Decimal>, AccountError> {
+        let pos = match self.get_position(id) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        match self.margin_mode {
+            MarginMode::Isolated => {
+                let price = Self::price_for(prices, &pos.symbol)?;
+                Ok(pos.liquidation_price_isolated(price))
+            }
+            MarginMode::Cross => self.liquidation_price_cross(&pos.symbol, prices),
+        }
+    }
+
+    /// Builds a full [`PositionView`] for a single position: current price,
+    /// PnL (gross and net), maintenance margin, and liquidation price — all
+    /// computed against the latest `prices`.
+    ///
+    /// Returns `Ok(None)` if the position id is not found.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountError::MissingPrice`] if any required symbol is not
+    /// in `prices`.
+    pub fn position_view(
+        &self,
+        id: PositionId,
+        prices: &Prices,
+    ) -> Result<Option<PositionView<'_>>, AccountError> {
+        let pos = match self.get_position(id) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let price = Self::price_for(prices, &pos.symbol)?;
+
+        let liquidation_price = match self.margin_mode {
+            MarginMode::Isolated => pos.liquidation_price_isolated(price),
+            MarginMode::Cross => self.liquidation_price_cross(&pos.symbol, prices)?,
+        };
+
+        Ok(Some(PositionView {
+            position: pos,
+            current_price: price,
+            gross_pnl: pos.gross_pnl(price),
+            net_pnl: pos.net_pnl(price),
+            maintenance_margin: pos.maintenance_margin(price),
+            liquidation_price,
+        }))
+    }
+
+    /// Builds a [`PositionView`] for every open position.
+    ///
+    /// Positions whose symbols are missing from `prices` are skipped.
+    /// If you need strict error reporting, use [`MarginAccount::position_view`]
+    /// per position.
+    pub fn all_position_views(&self, prices: &Prices) -> Vec<PositionView<'_>> {
+        self.positions
+            .iter()
+            .filter_map(|pos| self.position_view(pos.id, prices).ok().flatten())
+            .collect()
+    }
+}
+
+// ───────────────────────── Portfolio summary ─────────────────────────
+
+/// Compact aggregation across all open positions.
+///
+/// Useful for dashboards, logging, and risk checks where you want a
+/// single object with everything important instead of iterating over
+/// positions manually.
+#[derive(Debug, Clone)]
+pub struct PortfolioSummary {
+    /// Number of open positions.
+    pub position_count: usize,
+
+    /// Sum of gross unrealized PnL across all positions.
+    pub total_gross_pnl: Decimal,
+    /// Sum of net unrealized PnL (after entry fees and funding).
+    pub total_net_pnl: Decimal,
+
+    /// Sum of maintenance margin across all positions at current prices.
+    pub total_maintenance_margin: Decimal,
+    /// Sum of initial (used) margin across all positions.
+    pub total_used_margin: Decimal,
+
+    /// Id of the position closest to its liquidation price.
+    /// `None` if no positions, or if no liquidation price is computable.
+    pub nearest_liquidation_id: Option<PositionId>,
+    /// Absolute distance (in quote currency) from the current price to the
+    /// nearest liquidation price.
+    pub nearest_liquidation_distance: Option<Decimal>,
+    /// Same distance expressed as a fraction of the current price
+    /// (`0.05` = 5%). Useful for threshold checks.
+    pub nearest_liquidation_distance_frac: Option<Decimal>,
+}
+
+impl PortfolioSummary {
+    /// Returns `true` if any position is closer to liquidation than `threshold`
+    /// (fraction, e.g. `dec!(0.05)` for 5%).
+    pub fn is_close_to_liquidation(&self, threshold: Decimal) -> bool {
+        self.nearest_liquidation_distance_frac
+            .is_some_and(|d| d <= threshold)
+    }
+}
+
+/// Aggregated inspection methods.
+impl MarginAccount {
+    /// Builds a [`PortfolioSummary`] from the current positions and prices.
+    ///
+    /// For every position, computes gross and net PnL, maintenance margin,
+    /// used margin, and (depending on [`MarginMode`]) a liquidation price.
+    /// The "nearest to liquidation" position is chosen by the smallest
+    /// relative distance from the current price.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountError::MissingPrice`] if any position's symbol is
+    /// not in `prices`. Unlike [`MarginAccount::all_position_views`], this
+    /// method is **strict**: silent skips would produce misleading totals.
+    pub fn positions_summary(
+        &self,
+        prices: &Prices,
+    ) -> Result<PortfolioSummary, AccountError> {
+        let mut total_gross = Decimal::ZERO;
+        let mut total_net = Decimal::ZERO;
+        let mut total_mm = Decimal::ZERO;
+        let mut total_used = Decimal::ZERO;
+
+        // (id, absolute distance, distance as fraction of current price)
+        let mut nearest: Option<(PositionId, Decimal, Decimal)> = None;
+
+        for pos in &self.positions {
+            let price = Self::price_for(prices, &pos.symbol)?;
+
+            total_gross += pos.gross_pnl(price);
+            total_net += pos.net_pnl(price);
+            total_mm += pos.maintenance_margin(price);
+            total_used += pos.calculate_used_margin();
+
+            let liq = match self.margin_mode {
+                MarginMode::Isolated => pos.liquidation_price_isolated(price),
+                MarginMode::Cross => self.liquidation_price_cross(&pos.symbol, prices)?,
+            };
+
+            if let Some(liq_price) = liq {
+                let distance = (price - liq_price).abs();
+                let distance_frac = if price == Decimal::ZERO {
+                    Decimal::ZERO
+                } else {
+                    distance / price
+                };
+
+                let is_closer = match nearest {
+                    Some((_, _, best_frac)) => distance_frac < best_frac,
+                    None => true,
+                };
+                if is_closer {
+                    nearest = Some((pos.id, distance, distance_frac));
+                }
+            }
+        }
+
+        let (nearest_id, nearest_distance, nearest_distance_frac) = match nearest {
+            Some((id, d, df)) => (Some(id), Some(d), Some(df)),
+            None => (None, None, None),
+        };
+
+        Ok(PortfolioSummary {
+            position_count: self.positions.len(),
+            total_gross_pnl: total_gross,
+            total_net_pnl: total_net,
+            total_maintenance_margin: total_mm,
+            total_used_margin: total_used,
+            nearest_liquidation_id: nearest_id,
+            nearest_liquidation_distance: nearest_distance,
+            nearest_liquidation_distance_frac: nearest_distance_frac,
+        })
+    }
+}
