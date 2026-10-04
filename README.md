@@ -85,6 +85,7 @@ Clone the repo to run them:
 git clone git@github.com:BartScottPR0D/hl-paper-trader.git
 cd hl-paper-trader
 cargo run --example basic
+```
 
 ## Documentation
 
