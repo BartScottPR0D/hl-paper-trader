@@ -1,6 +1,6 @@
 //! Trading position model.
 //!
-//! A [`TradingPosition`] represents a single open position on a [`MarginAccount`].
+//! A [`TradingPosition`] represents a single open position on a [`MarginAccount`](crate::MarginAccount).
 //! It carries all static data (symbol, side, size, entry price, leverage,
 //! maintenance margin rate) and accumulates dynamic data over its lifetime
 //! (entry fee, funding payments).
