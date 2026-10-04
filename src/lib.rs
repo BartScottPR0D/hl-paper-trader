@@ -52,7 +52,7 @@ pub mod margin_account;
 pub mod trading_position;
 
 pub use margin_account::{
-    AccountError, FeeTier, MarginAccount, MarginMode, Prices,
+    AccountError, FeeTier, MarginAccount, MarginMode, PortfolioSummary, PositionView, Prices,
     DEFAULT_MARGIN_CALL_RATIO, DEFAULT_STOP_OUT_RATIO,
 };
 pub use trading_position::{
