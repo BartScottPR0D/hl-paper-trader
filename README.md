@@ -79,11 +79,12 @@ More examples in `examples/`:
 | `position_view` | Per-position helper methods |
 | `portfolio_summary` | Aggregate dashboard in one call |
 
-Run any of them with:
+Clone the repo to run them:
 
 ```bash
+git clone git@github.com:BartScottPR0D/hl-paper-trader.git
+cd hl-paper-trader
 cargo run --example basic
-```
 
 ## Documentation
 
