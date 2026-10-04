@@ -5,7 +5,7 @@ Simulates unrealized PnL, fees, funding, margin requirements, and liquidation
 for a margin account with one or more open positions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.98%2B-orange)](https://www.rust-lang.org)
 
 ## Features
 
